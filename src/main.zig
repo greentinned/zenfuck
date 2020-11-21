@@ -1,48 +1,81 @@
 const std = @import("std");
 
-pub fn main() anyerror!void {
-    const stdout = std.io.getStdOut().writer();
+const stdin = std.io.getStdIn().reader();
+const stdout = std.io.getStdOut().writer();
 
+pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
     const args = try std.process.argsAlloc(&arena.allocator);
+    var input = std.ArrayList(u8).init(&arena.allocator);
 
-    for (args) |arg, i| {
-        try stdout.print("zenfuck> {}: {}\n", .{ i, arg });
+    // read file
+
+    if (args.len > 1) {
+        const file = try std.fs.openFileAbsolute(args[1], .{ .read = true });
+        defer file.close();
+
+        try file.reader().readAllArrayList(&input, 30_000);
+    } else {
+        _ = try stdin.readAllArrayList(&input, 30_000);
     }
 
-    // -----------------------------------------------------
+    try stdout.print("program: \n\n{}\n", .{input.items});
+
+    // run input
 
     var tape = std.ArrayList(u8).init(&arena.allocator);
-    try tape.append(@as(u8, 0));
-    _ = run(&tape.items, ">><"[0..]);
+    try tape.append(0);
+
+    _ = try run(false, &tape, input.items);
 }
 
 var code_pos: u32 = 0;
 var tape_pos: u32 = 0;
 
-fn run(tape: *[]u8, code: []const u8) bool {
+const RunError = error{ Invalid, InvalidOp };
+
+fn run(skip: bool, tape: *std.ArrayList(u8), code: []const u8) RunError!bool {
     while (tape_pos >= 0 and code_pos < code.len) : (code_pos += 1) {
-        switch (code[code_pos]) {
-            '+' => {
-                // inc value on current tap_pos
-            },
-            '-' => {
-                // dec value on current tap_pos
-            },
-            '.' => {
-                // write to stdout
-            },
-            ',' => {
-                // read from stdin
-            },
-            '>' => tape_pos += 1,
-            '<' => tape_pos -= 1,
-            else => break,
+
+        // grow tape
+        if (tape_pos >= tape.items.len) {
+            try tape.append(0) catch |_| error.Invalid;
         }
 
-        std.log.info("code_pos: {}, tape_pos: {}", .{ code_pos, tape_pos });
+        if (code[code_pos] == '[') {
+            code_pos += 1;
+            const old_code_pos = code_pos;
+
+            while (try run(tape.items[tape_pos] == 0, tape, code)) {
+                code_pos = old_code_pos;
+            }
+        } else if (code[code_pos] == ']') {
+            return tape.items[tape_pos] != 0;
+        } else if (!skip) {
+            switch (code[code_pos]) {
+                '+' => {
+                    // inc value on current tap_pos
+                    tape.items[tape_pos] = tape.items[tape_pos] + 1;
+                },
+                '-' => {
+                    // dec value on current tap_pos
+                    tape.items[tape_pos] = tape.items[tape_pos] - 1;
+                },
+                '.' => {
+                    // write to stdout
+                    try stdout.print("{c}", .{tape.items[tape_pos]}) catch |_| error.Invalid;
+                },
+                ',' => {
+                    // read from stdin
+                    tape.items[tape_pos] = try stdin.readByte() catch |_| error.Invalid;
+                },
+                '>' => tape_pos += 1,
+                '<' => tape_pos -= 1,
+                else => continue,
+            }
+        }
     }
     return false;
 }
